@@ -1,0 +1,35 @@
+[project]
+name = "slack-mcp"
+version = "0.1.0"
+description = "A lean Slack MCP server for a user token: messages, threads, search, users, channels, user groups, reactions, scheduled messages, canvases and lists."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp==2.3.0",
+    "httpx>=0.27,<1",
+]
+
+[project.scripts]
+slack-mcp = "slack_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "anyio>=4",
+    "mypy>=2.4.0",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
