@@ -441,6 +441,13 @@ def reactions_remove(channel_id: str, timestamp: str, emoji: str) -> str:
     return f"Removed :{emoji.strip(':')}: from {timestamp} in {channel}"
 
 
+@tool(DESTRUCTIVE)
+def conversations_delete_message(channel_id: str, timestamp: str) -> dict:
+    """Delete a message you posted (permanent)."""
+    s = slack()
+    return s.call("chat.delete", channel=s.resolve_channel(channel_id), ts=timestamp)
+
+
 def to_epoch(post_at: str) -> int:
     if post_at.isdigit():
         return int(post_at)
@@ -493,6 +500,12 @@ def canvas_create(title: str | None = None, markdown_content: str | None = None,
         document_content=markdown(markdown_content),
         channel_id=s.resolve_channel(channel_id) if channel_id else None,
     )
+
+
+@tool(DESTRUCTIVE)
+def canvas_delete(canvas_id: str) -> dict:
+    """Delete a canvas (permanent)."""
+    return slack().call("canvases.delete", canvas_id=canvas_id)
 
 
 @tool(DESTRUCTIVE)
@@ -551,6 +564,18 @@ def list_items(list_id: str, limit: int = 100, cursor: str | None = None, includ
 def list_item_create(list_id: str, initial_fields: list[dict] | None = None, parent_item_id: str | None = None) -> dict:
     """Add an item. initial_fields: [{"column_id", <type>: value}]; text columns take "rich_text" blocks."""
     return slack().call("slackLists.items.create", list_id=list_id, initial_fields=initial_fields, parent_item_id=parent_item_id)
+
+
+@tool(DESTRUCTIVE)
+def list_item_delete(list_id: str, item_id: str) -> dict:
+    """Delete one item (row) from a List (permanent)."""
+    return slack().call("slackLists.items.delete", list_id=list_id, id=item_id)
+
+
+@tool(DESTRUCTIVE)
+def list_delete(list_id: str) -> dict:
+    """Delete a whole List and its items (permanent). Slack has no List-delete method, so this deletes the List's file."""
+    return slack().call("files.delete", file=list_id)
 
 
 @tool(DESTRUCTIVE)

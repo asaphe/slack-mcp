@@ -243,6 +243,20 @@ def test_reaction_strips_colons(fake):
     assert fake.last("reactions.add") == {"channel": "C01GEN", "timestamp": "1.2", "name": "eyes"}
 
 
+def test_delete_tools_call_their_methods(fake):
+    server.conversations_delete_message("C01GEN", "1.2")
+    server.canvas_delete("F1")
+    server.list_item_delete("F2", "Rec1")
+    server.list_delete("F2")
+    assert fake.last("chat.delete") == {"channel": "C01GEN", "ts": "1.2"}
+    assert fake.last("canvases.delete") == {"canvas_id": "F1"}
+    assert fake.last("slackLists.items.delete") == {"list_id": "F2", "id": "Rec1"}
+    assert fake.last("files.delete") == {"file": "F2"}
+    tools = {t.name: t.annotations for t in anyio.run(server.mcp.list_tools)}
+    for name in ("conversations_delete_message", "canvas_delete", "list_item_delete", "list_delete"):
+        assert tools[name].destructive_hint is True, name
+
+
 def test_structured_args_go_as_json(fake):
     server.canvas_edit("F1", "replace", markdown_content="# hi")
     assert fake.last("canvases.edit")["changes"] == [
