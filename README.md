@@ -18,7 +18,7 @@ A lean [MCP](https://modelcontextprotocol.io) server that acts in Slack as **you
 | `canvas_create`, `canvas_edit`, `canvas_find_sections`, `canvas_read` | Canvases from and to markdown | `canvases.*`, `files.info` |
 | `list_create`, `list_items`, `list_item_create`, `list_items_update` | Slack Lists (paid plans) | `slackLists.*` |
 
-Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` for that user's DM. Only `conversations_add_message` and `schedule_message` open a DM that does not exist yet; read tools fail instead. A user is matched by ID, handle, then display or real name, and an ambiguous name is refused. Paging cursors carry the original window and page size. Tool names and parameters match [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) for the overlapping tools, so existing prompts and permission rules keep working.
+Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` for that user's DM. `conversations_add_message` and `schedule_message` also accept `@a,@b` for a group DM with those users (it needs the `mpim:write` scope; Slack returns the existing group DM when one exists). Only those two tools open a DM that does not exist yet; read tools fail instead. A user is matched by ID, handle, then display or real name, and an ambiguous name is refused. Paging cursors carry the original window and page size. Tool names and parameters match [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) for the overlapping tools, so existing prompts and permission rules keep working.
 
 ## Setup
 
@@ -31,7 +31,7 @@ Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` f
        "scopes": {
          "user": [
            "channels:history", "channels:read", "groups:history", "groups:read",
-           "im:history", "im:read", "im:write", "mpim:history", "mpim:read",
+           "im:history", "im:read", "im:write", "mpim:history", "mpim:read", "mpim:write",
            "users:read", "users:read.email", "chat:write", "search:read",
            "usergroups:read", "reactions:write",
            "canvases:read", "canvases:write", "files:read", "lists:read", "lists:write"

@@ -107,6 +107,20 @@ def test_at_user_opens_dm_when_none_exists(fake):
     assert server.slack().resolve_channel("@Bob Roe", open_dm=True) == "D7NEW"
 
 
+def test_group_dm_opens_one_conversation_for_all_users(fake):
+    fake.responses["conversations.open"] = {"channel": {"id": "G0GROUP"}}
+    assert server.slack().resolve_channel("@bob, @ali", open_dm=True) == "G0GROUP"
+    assert fake.last("conversations.open")["users"] == "U01ALICE,U02BOB"
+
+
+def test_group_dm_refused_for_reads_and_single_user(fake):
+    with pytest.raises(SlackError, match="only be addressed when posting"):
+        server.slack().resolve_channel("@bob,@alice")
+    with pytest.raises(SlackError, match="at least two distinct users"):
+        server.slack().resolve_channel("@bob,@Bob Roe", open_dm=True)
+    assert not [c for c in fake.calls if c[0] == "conversations.open"]
+
+
 def test_unknown_channel_refreshes_once_then_fails(fake):
     with pytest.raises(SlackError, match="#nope not found"):
         server.slack().resolve_channel("#nope")
