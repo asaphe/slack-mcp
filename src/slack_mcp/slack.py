@@ -179,10 +179,18 @@ class Slack:
         return self._ims
 
     def resolve_channel(self, raw: str, open_dm: bool = False) -> str:
-        """Accept a channel ID, #name, or @user; return the conversation ID. Only open_dm may create a DM."""
+        """Accept a channel ID, #name, @user, or @a,@b for a group DM; return the conversation ID.
+        Only open_dm may create a DM."""
         raw = raw.strip()
         if raw.startswith("#"):
             return self.channel_id_by_name(raw)
+        if raw.startswith("@") and "," in raw:
+            if not open_dm:
+                raise SlackError(f"a group DM ({raw}) can only be addressed when posting")
+            user_ids = sorted({self.resolve_user(part) for part in raw.split(",") if part.strip()})
+            if len(user_ids) < 2:
+                raise SlackError(f"a group DM needs at least two distinct users, got {raw!r}")
+            return self.call("conversations.open", users=",".join(user_ids))["channel"]["id"]
         if raw.startswith("@"):
             user_id = self.resolve_user(raw)
             dm = self.ims().get(user_id) or self.ims(refresh=True).get(user_id)
