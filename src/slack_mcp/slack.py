@@ -14,14 +14,15 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 
 API = "https://slack.com/api/"
 FILES_HOST = "files.slack.com"
 MAX_RETRIES = 2
 
 
-class SlackError(RuntimeError):
-    pass
+class SlackError(ToolError):
+    """An anticipated failure; MCPServer passes a ToolError's text to the client and masks any other exception's."""
 
 
 class Slack:
