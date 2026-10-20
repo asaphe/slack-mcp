@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import anyio
 import httpx
 import pytest
+from mcp.client import Client
 
 from slack_mcp import server
 from slack_mcp.slack import (
@@ -271,6 +272,18 @@ def test_api_error_names_missing_scope_without_leaking_token(fake):
     with pytest.raises(SlackError) as error:
         server.reactions_add("C01GEN", "1.2", "eyes")
     assert "reactions:write" in str(error.value) and TOKEN not in str(error.value)
+
+
+def test_slack_error_text_reaches_the_client(fake):
+    fake.responses["chat.delete"] = lambda body: httpx.Response(200, json={"ok": False, "error": "cant_delete_message"})
+
+    async def main():
+        async with Client(server.mcp) as client:
+            return await client.call_tool("conversations_delete_message", {"channel_id": "C01GEN", "timestamp": "1.2"})
+
+    result = anyio.run(main)
+    assert result.is_error
+    assert result.content[0].text == "Error executing tool conversations_delete_message: chat.delete: cant_delete_message"
 
 
 def test_rate_limit_is_retried(fake):
