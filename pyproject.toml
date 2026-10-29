@@ -18,7 +18,7 @@ dev = [
     "anyio>=4",
     "mypy>=2.4.0",
     "pytest>=8",
-    "ruff>=0.17.1",
+    "ruff>=0.17.2",
 ]
 
 [build-system]
