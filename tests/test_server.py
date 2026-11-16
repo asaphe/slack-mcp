@@ -258,6 +258,118 @@ def test_delete_tools_call_their_methods(fake):
         assert tools[name].destructive_hint is True, name
 
 
+def test_update_message_sends_markdown_text(fake):
+    fake.responses["chat.update"] = {"channel": "C01GEN", "ts": "1.2"}
+    out = server.conversations_update_message("#general", "1.2", "**fixed**")
+    assert fake.last("chat.update") == {"channel": "C01GEN", "ts": "1.2", "markdown_text": "**fixed**"}
+    assert out == "Updated C01GEN (ts=1.2)"
+    server.conversations_update_message("C01GEN", "1.2", "plain", content_type="text/plain")
+    assert fake.last("chat.update") == {"channel": "C01GEN", "ts": "1.2", "text": "plain"}
+    tools = {t.name: t.annotations for t in anyio.run(server.mcp.list_tools)}
+    assert tools["conversations_update_message"].destructive_hint is True
+
+
+def test_update_message_never_opens_a_dm(fake):
+    with pytest.raises(SlackError, match="no DM"):
+        server.conversations_update_message("@bob", "1.2", "x")
+    assert not [m for m, _ in fake.calls if m in ("conversations.open", "chat.update")]
+
+
+def test_schedule_message_defaults_to_markdown(fake):
+    server.schedule_message("C01GEN", "1800000000", "**hi**")
+    body = fake.last("chat.scheduleMessage")
+    assert body["markdown_text"] == "**hi**" and "text" not in body
+    server.schedule_message("C01GEN", "1800000000", "hi", content_type="text/plain")
+    assert fake.last("chat.scheduleMessage")["text"] == "hi"
+
+
+def preview_env(fake):
+    fake.responses["conversations.list"] = lambda body: httpx.Response(
+        200, json={"ok": True, "channels": [{"id": "D0SELF", "user": "U01ALICE"}] if body.get("types") == "im" else CHANNELS}
+    )
+    fake.responses["chat.postMessage"] = lambda body: httpx.Response(
+        200, json={"ok": True, "channel": body["channel"], "ts": "9.9"}
+    )
+    server._previews.clear()
+
+
+def test_preview_posts_draft_to_self_dm_and_hash_sends_identical_bytes(fake):
+    preview_env(fake)
+    out = server.conversations_preview_message("#general", "**Update**\n- a", thread_ts="1.1")
+    draft = fake.last("chat.postMessage")
+    digest = out.split("preview_hash=")[1].split(":")[0]
+    assert draft["channel"] == "D0SELF"
+    assert draft["markdown_text"] == f"**DRAFT → #general (C01GEN), thread 1.1 · preview_hash {digest}**\n\n**Update**\n- a"
+    server.conversations_add_message("#general", text="**Update**\n- a", thread_ts="1.1", preview_hash=digest)
+    sent = fake.last("chat.postMessage")
+    assert sent == {
+        "channel": "C01GEN",
+        "thread_ts": "1.1",
+        "unfurl_links": "false",
+        "unfurl_media": "false",
+        "markdown_text": "**Update**\n- a",
+    }
+
+
+def test_preview_hash_refuses_changed_payload_and_second_send(fake):
+    preview_env(fake)
+    out = server.conversations_preview_message("C01GEN", "draft")
+    digest = out.split("preview_hash=")[1].split(":")[0]
+    for kwargs in ({"text": "draft!"}, {"text": "draft", "thread_ts": "1.1"}, {"text": "draft", "content_type": "text/plain"}):
+        with pytest.raises(SlackError, match="does not match"):
+            server.conversations_add_message("C01GEN", preview_hash=digest, **kwargs)
+    with pytest.raises(SlackError, match="does not match"):
+        server.conversations_add_message("C02OPS", text="draft", preview_hash=digest)
+    server.conversations_add_message("C01GEN", text="draft", preview_hash=digest)
+    with pytest.raises(SlackError, match="does not match"):
+        server.conversations_add_message("C01GEN", text="draft", preview_hash=digest)
+    with pytest.raises(SlackError, match="not blocks"):
+        server.conversations_add_message("C01GEN", blocks='[{"type":"divider"}]', preview_hash=digest)
+
+
+def test_failed_send_keeps_the_preview(fake):
+    preview_env(fake)
+    out = server.conversations_preview_message("C01GEN", "draft")
+    digest = out.split("preview_hash=")[1].split(":")[0]
+    fake.responses["chat.postMessage"] = lambda body: httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+    with pytest.raises(SlackError, match="channel_not_found"):
+        server.conversations_add_message("C01GEN", text="draft", preview_hash=digest)
+    assert digest in server._previews
+
+
+def test_transport_error_spends_the_preview(fake):
+    preview_env(fake)
+    out = server.conversations_preview_message("C01GEN", "draft")
+    digest = out.split("preview_hash=")[1].split(":")[0]
+
+    def timeout(body):
+        raise httpx.ReadTimeout("timed out")
+
+    fake.responses["chat.postMessage"] = timeout
+    with pytest.raises(httpx.ReadTimeout):
+        server.conversations_add_message("C01GEN", text="draft", preview_hash=digest)
+    assert digest not in server._previews
+
+
+def test_unknown_preview_hash_refused_without_posting(fake):
+    preview_env(fake)
+    with pytest.raises(SlackError, match="does not match"):
+        server.conversations_add_message("C01GEN", text="x", preview_hash="0" * 16)
+    assert not [m for m, _ in fake.calls if m == "chat.postMessage"]
+
+
+def test_preview_plain_text_keeps_mrkdwn_off(fake):
+    preview_env(fake)
+    server.conversations_preview_message("C01GEN", "*literal*", content_type="text/plain")
+    draft = fake.last("chat.postMessage")
+    assert draft["mrkdwn"] == "false" and draft["text"].startswith("DRAFT → C01GEN (C01GEN) · preview_hash ")
+
+
+def test_at_user_id_resolves_without_directory(fake):
+    assert server.slack().resolve_user("@U01ALICE") == "U01ALICE"
+    assert not [m for m, _ in fake.calls if m == "users.list"]
+
+
 def test_structured_args_go_as_json(fake):
     server.canvas_edit("F1", "replace", markdown_content="# hi")
     assert fake.last("canvases.edit")["changes"] == [

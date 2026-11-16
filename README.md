@@ -9,17 +9,19 @@ A lean [MCP](https://modelcontextprotocol.io) server that acts in Slack as **you
 | `conversations_history` | Channel or DM messages as CSV; `limit` is a count (`50`) or a window (`1d`, `2w`, `3m`) | `conversations.history` |
 | `conversations_replies` | A thread as CSV | `conversations.replies` |
 | `conversations_add_message` | Post as you; markdown is rendered by Slack (`markdown_text`), unfurling off | `chat.postMessage` |
+| `conversations_preview_message` | Post a `DRAFT` of a text message to your own DM and return a `preview_hash`; `conversations_add_message` with that hash sends only the identical payload, once | `chat.postMessage` |
+| `conversations_update_message` | Edit the text of a message you posted (markdown by default) | `chat.update` |
 | `conversations_delete_message` | Delete a message you posted | `chat.delete` |
 | `conversations_search_messages` | Search with channel, user, date and thread filters, or fetch one message by URL | `search.messages` |
 | `users_search` | Find users by ID, handle, name or email, with their DM channel | `users.list`, `users.info` |
 | `channels_list` / `channels_me` | All channels, filtered and sorted / channels you are in | `conversations.list`, `users.conversations` |
 | `usergroups_list` / `usergroups_me` | User groups / the groups you belong to (read-only) | `usergroups.list` |
 | `reactions_add` / `reactions_remove` | Emoji reactions | `reactions.*` |
-| `schedule_message`, `list_scheduled_messages`, `delete_scheduled_message` | Scheduled messages | `chat.scheduleMessage`, `chat.scheduledMessages.list`, `chat.deleteScheduledMessage` |
+| `schedule_message`, `list_scheduled_messages`, `delete_scheduled_message` | Scheduled messages; text is markdown by default, like posting | `chat.scheduleMessage`, `chat.scheduledMessages.list`, `chat.deleteScheduledMessage` |
 | `canvas_create`, `canvas_edit`, `canvas_find_sections`, `canvas_read`, `canvas_delete` | Canvases from and to markdown | `canvases.*`, `files.info` |
 | `list_create`, `list_items`, `list_item_create`, `list_items_update`, `list_item_delete`, `list_delete` | Slack Lists (paid plans); `list_delete` removes the List's file because Slack has no List-delete method | `slackLists.*`, `files.delete` |
 
-Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` for that user's DM. `conversations_add_message` and `schedule_message` also accept `@a,@b` for a group DM with those users (it needs the `mpim:write` scope; Slack returns the existing group DM when one exists). Only those two tools open a DM that does not exist yet; read tools fail instead. A user is matched by ID, handle, then display or real name, and an ambiguous name is refused. Paging cursors carry the original window and page size. Tool names and parameters match [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) for the overlapping tools, so existing prompts and permission rules keep working.
+Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` for that user's DM. `conversations_add_message`, `conversations_preview_message` and `schedule_message` also accept `@a,@b` for a group DM with those users (it needs the `mpim:write` scope; Slack returns the existing group DM when one exists). Only those three tools open a DM that does not exist yet; read tools and `conversations_update_message` fail instead. A preview's hash covers the resolved channel, `thread_ts`, `content_type` and the exact text; pending previews are held in memory, so a server restart drops them. A user is matched by ID, handle, then display or real name, and an ambiguous name is refused. Paging cursors carry the original window and page size. Tool names and parameters match [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) for the overlapping tools, so existing prompts and permission rules keep working.
 
 ## Setup
 

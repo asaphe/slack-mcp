@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -163,6 +165,46 @@ def conversations_replies(
     return message_page("conversations.replies", args, include_activity_messages, ts=thread_ts)
 
 
+def text_args(text: str, content_type: str, plain_flag: bool = True) -> dict[str, Any]:
+    """Slack arguments carrying text: markdown as native markdown_text, plain as text with mrkdwn off where the
+    method accepts that flag (chat.update and chat.scheduleMessage do not)."""
+    if content_type == "text/markdown":
+        if len(text) > 12000:
+            raise SlackError("markdown messages are limited to 12,000 characters")
+        return {"markdown_text": text}
+    if content_type == "text/plain":
+        return {"text": text, "mrkdwn": False} if plain_flag else {"text": text}
+    raise SlackError("content_type must be 'text/markdown' or 'text/plain'")
+
+
+def check_thread_ts(thread_ts: str | None) -> None:
+    if thread_ts and "." not in thread_ts:
+        raise SlackError("thread_ts must look like 1234567890.123456")
+
+
+_previews: set[str] = set()
+_previews_lock = threading.Lock()
+
+
+def claim_preview(given: str, actual: str) -> None:
+    """Take a pending preview for this exact payload, so two concurrent sends cannot both use it."""
+    with _previews_lock:
+        if given != actual or given not in _previews:
+            raise SlackError("preview_hash does not match a pending preview of this exact payload; preview it again")
+        _previews.remove(given)
+
+
+def payload_hash(channel: str, thread_ts: str | None, content_type: str, text: str) -> str:
+    """Identity of a text post: the resolved channel and the exact bytes Slack receives."""
+    canon = json.dumps(
+        {"channel": channel, "thread_ts": thread_ts or None, "content_type": content_type, "text": text},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
 @tool(DESTRUCTIVE)
 def conversations_add_message(
     channel_id: str,
@@ -170,36 +212,80 @@ def conversations_add_message(
     thread_ts: str | None = None,
     content_type: str = "text/markdown",
     blocks: list[dict] | str | None = None,
+    preview_hash: str | None = None,
 ) -> str:
     """Post a message as you. content_type: 'text/markdown' (standard markdown, rendered by Slack) or 'text/plain'.
     blocks: a Block Kit array, which takes precedence; text then becomes the notification fallback.
-    Link and media unfurling is off."""
-    if thread_ts and "." not in thread_ts:
-        raise SlackError("thread_ts must look like 1234567890.123456")
+    preview_hash: from conversations_preview_message; the post is refused unless channel, thread_ts, content_type
+    and text are exactly what was previewed, and each preview sends once. Link and media unfurling is off."""
+    check_thread_ts(thread_ts)
     if not text and not blocks:
         raise SlackError("either text or blocks must be provided")
     s = slack()
-    args: dict[str, Any] = {
-        "channel": s.resolve_channel(channel_id, open_dm=True),
-        "thread_ts": thread_ts,
-        "unfurl_links": False,
-        "unfurl_media": False,
-    }
+    channel = s.resolve_channel(channel_id, open_dm=True)
+    args: dict[str, Any] = {"channel": channel, "thread_ts": thread_ts, "unfurl_links": False, "unfurl_media": False}
+    if preview_hash is not None:
+        if blocks or text is None:
+            raise SlackError("preview_hash applies to a text post, not blocks")
+        claim_preview(preview_hash, payload_hash(channel, thread_ts, content_type, text))
     if blocks:
         args["blocks"] = json.loads(blocks) if isinstance(blocks, str) else blocks
         args["text"] = text
-    elif content_type == "text/markdown":
-        if len(text or "") > 12000:
-            raise SlackError("markdown messages are limited to 12,000 characters")
-        args["markdown_text"] = text
-    elif content_type == "text/plain":
-        args["text"] = text
-        args["mrkdwn"] = False
     else:
-        raise SlackError("content_type must be 'text/markdown' or 'text/plain'")
-    data = s.call("chat.postMessage", **args)
+        args |= text_args(text or "", content_type)
+    try:
+        data = s.call("chat.postMessage", **args)
+    except SlackError:
+        if preview_hash is not None:  # Slack refused it, so nothing posted; a transport error may have posted, so it stays spent
+            with _previews_lock:
+                _previews.add(preview_hash)
+        raise
     where = f" in thread {thread_ts}" if thread_ts else ""
     return f"Posted to {data['channel']}{where} (ts={data['ts']})"
+
+
+@tool(WRITE)
+def conversations_preview_message(
+    channel_id: str,
+    text: str,
+    thread_ts: str | None = None,
+    content_type: str = "text/markdown",
+) -> str:
+    """Post a DRAFT of a message to your own DM, exactly as it would render, and return its preview_hash.
+    Sending it is conversations_add_message with the same channel_id, text, thread_ts and content_type plus
+    preview_hash, which refuses anything but those exact bytes. Previews live until the server restarts."""
+    check_thread_ts(thread_ts)
+    s = slack()
+    channel = s.resolve_channel(channel_id, open_dm=True)
+    digest = payload_hash(channel, thread_ts, content_type, text)
+    where = f"{channel_id.strip()} ({channel})" + (f", thread {thread_ts}" if thread_ts else "")
+    header = f"DRAFT → {where} · preview_hash {digest}"
+    header = f"**{header}**" if content_type == "text/markdown" else header
+    self_dm = s.resolve_channel(f"@{s.me()}", open_dm=True)
+    data = s.call(
+        "chat.postMessage",
+        channel=self_dm,
+        unfurl_links=False,
+        unfurl_media=False,
+        **text_args(f"{header}\n\n{text}", content_type),
+    )
+    with _previews_lock:
+        _previews.add(digest)
+    return (
+        f"Previewed in your DM {self_dm} (ts={data['ts']}). preview_hash={digest}: after approval, call "
+        f"conversations_add_message with the same channel_id, text, thread_ts and content_type plus this preview_hash."
+    )
+
+
+@tool(DESTRUCTIVE)
+def conversations_update_message(channel_id: str, timestamp: str, text: str, content_type: str = "text/markdown") -> str:
+    """Edit a message you posted, replacing its text. content_type as in conversations_add_message; text/plain is
+    sent as text, which Slack still formats as mrkdwn on this method."""
+    s = slack()
+    data = s.call(
+        "chat.update", channel=s.resolve_channel(channel_id), ts=timestamp, **text_args(text, content_type, plain_flag=False)
+    )
+    return f"Updated {data['channel']} (ts={data['ts']})"
 
 
 def search_terms(
@@ -462,15 +548,19 @@ def markdown(md: str | None) -> dict | None:
 
 
 @tool(DESTRUCTIVE)
-def schedule_message(channel: str, post_at: str, text: str, thread_ts: str | None = None) -> dict:
-    """Schedule a message up to 120 days ahead. post_at: Unix seconds or ISO-8601 with offset."""
+def schedule_message(
+    channel: str, post_at: str, text: str, thread_ts: str | None = None, content_type: str = "text/markdown"
+) -> dict:
+    """Schedule a message up to 120 days ahead. post_at: Unix seconds or ISO-8601 with offset.
+    content_type as in conversations_add_message; text/plain is sent as text, which Slack formats as mrkdwn here."""
+    check_thread_ts(thread_ts)
     s = slack()
     return s.call(
         "chat.scheduleMessage",
         channel=s.resolve_channel(channel, open_dm=True),
         post_at=to_epoch(post_at),
-        text=text,
         thread_ts=thread_ts,
+        **text_args(text, content_type, plain_flag=False),
     )
 
 
