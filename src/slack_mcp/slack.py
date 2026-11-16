@@ -141,8 +141,8 @@ class Slack:
         raw = raw.strip()
         if re.fullmatch(r"<@[UW][A-Z0-9]+>", raw):
             return raw[2:-1]
-        if re.fullmatch(r"[UW][A-Z0-9]{6,}", raw):
-            return raw
+        if re.fullmatch(r"@?[UW][A-Z0-9]{6,}", raw):
+            return raw.removeprefix("@")
         self._load_users()
         key = raw.removeprefix("@").lower()
         with self._lock:
