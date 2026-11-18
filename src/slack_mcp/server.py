@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
+from .checks import STYLE_ENV, check, parse_style, refusal
 from .slack import (
     Slack,
     SlackError,
@@ -177,6 +178,16 @@ def text_args(text: str, content_type: str, plain_flag: bool = True) -> dict[str
     raise SlackError("content_type must be 'text/markdown' or 'text/plain'")
 
 
+def check_text(text: str, content_type: str) -> None:
+    """Refuse a text the checks reject, before any Slack call, so a refused message never resolves a channel or opens a DM."""
+    try:
+        result = check(text, content_type, parse_style(os.environ.get(STYLE_ENV)))
+    except ValueError as error:
+        raise SlackError(str(error)) from error
+    if result.issues:
+        raise SlackError(refusal(result))
+
+
 def check_thread_ts(thread_ts: str | None) -> None:
     if thread_ts and "." not in thread_ts:
         raise SlackError("thread_ts must look like 1234567890.123456")
@@ -221,6 +232,8 @@ def conversations_add_message(
     check_thread_ts(thread_ts)
     if not text and not blocks:
         raise SlackError("either text or blocks must be provided")
+    if text is not None and not blocks:
+        check_text(text, content_type)
     s = slack()
     channel = s.resolve_channel(channel_id, open_dm=True)
     args: dict[str, Any] = {"channel": channel, "thread_ts": thread_ts, "unfurl_links": False, "unfurl_media": False}
@@ -255,6 +268,7 @@ def conversations_preview_message(
     Sending it is conversations_add_message with the same channel_id, text, thread_ts and content_type plus
     preview_hash, which refuses anything but those exact bytes. Previews live until the server restarts."""
     check_thread_ts(thread_ts)
+    check_text(text, content_type)
     s = slack()
     channel = s.resolve_channel(channel_id, open_dm=True)
     digest = payload_hash(channel, thread_ts, content_type, text)
@@ -281,6 +295,7 @@ def conversations_preview_message(
 def conversations_update_message(channel_id: str, timestamp: str, text: str, content_type: str = "text/markdown") -> str:
     """Edit a message you posted, replacing its text. content_type as in conversations_add_message; text/plain is
     sent as text, which Slack still formats as mrkdwn on this method."""
+    check_text(text, content_type)
     s = slack()
     data = s.call(
         "chat.update", channel=s.resolve_channel(channel_id), ts=timestamp, **text_args(text, content_type, plain_flag=False)
@@ -554,6 +569,7 @@ def schedule_message(
     """Schedule a message up to 120 days ahead. post_at: Unix seconds or ISO-8601 with offset.
     content_type as in conversations_add_message; text/plain is sent as text, which Slack formats as mrkdwn here."""
     check_thread_ts(thread_ts)
+    check_text(text, content_type)
     s = slack()
     return s.call(
         "chat.scheduleMessage",
@@ -677,6 +693,10 @@ def list_items_update(list_id: str, cells: list[dict]) -> dict:
 def main() -> None:
     if not os.environ.get("SLACK_USER_TOKEN"):
         raise SystemExit("slack-mcp: SLACK_USER_TOKEN is not set")
+    try:
+        parse_style(os.environ.get(STYLE_ENV))
+    except ValueError as error:
+        raise SystemExit(f"slack-mcp: {error}") from error
     logging.getLogger("httpx").setLevel(logging.WARNING)
     mcp.run()
 

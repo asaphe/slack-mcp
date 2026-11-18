@@ -1,6 +1,6 @@
 [project]
 name = "slack-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "A lean Slack MCP server for a user token: messages, threads, search, users, channels, user groups, reactions, scheduled messages, canvases and lists."
 readme = "README.md"
 license = "MIT"
@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 slack-mcp = "slack_mcp.server:main"
+slack-mcp-check = "slack_mcp.check_cli:main"
 
 [dependency-groups]
 dev = [

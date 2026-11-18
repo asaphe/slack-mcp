@@ -22,6 +22,7 @@ uv run pytest
 ## Guidelines
 
 - Tools live in `src/slack_mcp/server.py`; HTTP, retries and name resolution live in `src/slack_mcp/slack.py`. Call Slack through `Slack.call`, not a new HTTP client.
+- Message checks live in `src/slack_mcp/checks.py`, which stays pure (standard library only, no token, no network) so `slack-mcp-check` runs offline. A tool that takes a `text` argument calls `check_text` before any Slack call.
 - A tool's docstring is its MCP description; keep it accurate and short.
 - Tests use `httpx.MockTransport` (see `tests/test_server.py`); never a real token or workspace.
 - No tokens, workspace IDs, real user or channel names, or personal data anywhere in code, tests or docs.

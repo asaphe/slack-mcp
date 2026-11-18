@@ -1,3 +1,4 @@
+import inspect
 import json
 import time
 from datetime import date, datetime
@@ -615,3 +616,111 @@ def test_concurrent_resolution_never_sees_a_partial_directory(monkeypatch):
 
     anyio.run(main)
     assert results == ["U02BOB"] * 8
+
+
+TEXT_TOOL_ARGS = {"channel_id": "@bob", "channel": "@bob", "timestamp": "1.2", "post_at": "1800000000"}
+
+
+def text_tools():
+    return sorted(t.name for t in anyio.run(server.mcp.list_tools) if "text" in t.input_schema["properties"])
+
+
+def call_text_tool(name, text, **extra):
+    required = [
+        p for p in next(t for t in anyio.run(server.mcp.list_tools) if t.name == name).input_schema["required"] if p != "text"
+    ]
+    return getattr(server, name)(**{p: TEXT_TOOL_ARGS[p] for p in required}, text=text, **extra)
+
+
+def test_the_text_tools_are_the_four_known_ones():
+    assert text_tools() == [
+        "conversations_add_message",
+        "conversations_preview_message",
+        "conversations_update_message",
+        "schedule_message",
+    ]
+
+
+@pytest.mark.parametrize("name", text_tools())
+def test_every_text_tool_refuses_wrong_dialect_before_any_slack_call(fake, name):
+    with pytest.raises(SlackError, match="slack-mcp message check, a local check and not an error from Slack") as error:
+        call_text_tool(name, "*Status*\n• see <https://x.io/a|the PR>")
+    assert "<<<\n**Status**\n- see [the PR](https://x.io/a)\n>>>" in str(error.value)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("content_type", ["text/markdown", "text/plain"])
+@pytest.mark.parametrize("name", text_tools())
+def test_every_text_tool_refuses_a_bare_mention_in_either_content_type(fake, name, content_type):
+    with pytest.raises(SlackError, match="slack-mcp message check"):
+        call_text_tool(name, "Ping @platform about it.", content_type=content_type)
+    assert fake.calls == []
+
+
+def test_every_function_that_builds_a_text_payload_checks_it_first():
+    """text_args is the only place a text becomes a Slack argument, so each of its callers must run check_text first."""
+    assert inspect.getsource(server).count('"markdown_text"') == 1
+    callers = [
+        name
+        for name, fn in inspect.getmembers(server, inspect.isfunction)
+        if fn.__module__ == server.__name__ and name != "text_args" and "text_args(" in inspect.getsource(fn)
+    ]
+    assert sorted(callers) == text_tools()
+    for name in callers:
+        body = inspect.getsource(getattr(server, name))
+        assert "check_text(text, content_type)" in body, name
+        assert body.index("check_text(text, content_type)") < body.index("slack()"), name
+
+
+@pytest.mark.parametrize("name", text_tools())
+def test_every_text_tool_applies_the_style_rules_only_when_asked(fake, monkeypatch, name):
+    preview_env(fake)
+    fake.responses["chat.update"] = {"channel": "D9BOB", "ts": "1.2"}
+    fake.responses["conversations.list"] = lambda body: httpx.Response(
+        200, json={"ok": True, "channels": [{"id": "D9BOB", "user": "U02BOB"}, {"id": "D0SELF", "user": "U01ALICE"}]}
+    )
+    wall = " ".join(["This sentence is filler."] * 7)
+    monkeypatch.delenv("SLACK_MCP_STYLE", raising=False)
+    call_text_tool(name, wall)
+    sent = len(fake.calls)
+    monkeypatch.setenv("SLACK_MCP_STYLE", "paragraphs")
+    with pytest.raises(SlackError, match="paragraph 1 is 28 words / 7 sentences"):
+        call_text_tool(name, wall)
+    assert len(fake.calls) == sent
+
+
+@pytest.mark.parametrize("name", text_tools())
+def test_an_unknown_style_rule_refuses_every_text_post(fake, monkeypatch, name):
+    monkeypatch.setenv("SLACK_MCP_STYLE", "on")
+    with pytest.raises(SlackError, match="unknown style rule"):
+        call_text_tool(name, "fine")
+    assert fake.calls == []
+
+
+def test_blocks_message_is_not_checked(fake):
+    fake.responses["chat.postMessage"] = {"channel": "C01GEN", "ts": "1.2"}
+    server.conversations_add_message("C01GEN", text="*fallback* • x", blocks=[{"type": "divider"}])
+    assert fake.last("chat.postMessage")["text"] == "*fallback* • x"
+
+
+def test_unknown_content_type_is_refused_before_any_slack_call(fake):
+    with pytest.raises(SlackError, match="content_type must be"):
+        server.conversations_add_message("@bob", text="x", content_type="text/html")
+    assert fake.calls == []
+
+
+def test_check_refusal_reaches_the_client(fake):
+    async def main():
+        async with Client(server.mcp) as client:
+            return await client.call_tool("schedule_message", {"channel": "@bob", "post_at": "1800000000", "text": "• x"})
+
+    result = anyio.run(main)
+    assert result.is_error and fake.calls == []
+    assert result.content[0].text.startswith("Error executing tool schedule_message: slack-mcp message check, a local check")
+
+
+def test_main_refuses_to_start_with_an_unknown_style_rule(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", TOKEN)
+    monkeypatch.setenv("SLACK_MCP_STYLE", "walls")
+    with pytest.raises(SystemExit, match="slack-mcp: SLACK_MCP_STYLE: unknown style rule"):
+        server.main()
