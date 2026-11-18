@@ -23,6 +23,27 @@ A lean [MCP](https://modelcontextprotocol.io) server that acts in Slack as **you
 
 Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` for that user's DM. `conversations_add_message`, `conversations_preview_message` and `schedule_message` also accept `@a,@b` for a group DM with those users (it needs the `mpim:write` scope; Slack returns the existing group DM when one exists). Only those three tools open a DM that does not exist yet; read tools and `conversations_update_message` fail instead. A preview's hash covers the resolved channel, `thread_ts`, `content_type` and the exact text; pending previews are held in memory, so a server restart drops them. A user is matched by ID, handle, then display or real name, and an ambiguous name is refused. Paging cursors carry the original window and page size. Tool names and parameters match [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) for the overlapping tools, so existing prompts and permission rules keep working.
 
+## Message checks
+
+Before any text is sent, `conversations_add_message`, `conversations_preview_message`, `conversations_update_message` and `schedule_message` check it locally. A text that would render wrongly is refused before any Slack call is made; the refusal lists what is wrong and carries the corrected text to retry with. A message sent as `blocks` is not checked.
+
+| Check | When | Refuses |
+|---|---|---|
+| Dialect | always | Slack mrkdwn under `text/markdown`: `<url\|label>` links, `•` bullets, and `*single-asterisk*` spans (italic in markdown, bold in mrkdwn) |
+| Mentions | always | a bare `@name`, which notifies no one: use `<@U…>`, `<!subteam^S…>`, or backticks |
+| `paragraphs` | opt-in | a paragraph or list item over 80 words or 5 sentences |
+| `plain-markup` | opt-in | markup in a `text/plain` message, where it shows literally |
+
+Turn the opt-in rules on in the launcher with `SLACK_MCP_STYLE`, a comma-separated list: `export SLACK_MCP_STYLE=paragraphs,plain-markup`. An unknown rule name stops the server at startup.
+
+`slack-mcp-check` runs the same checks offline, with no token and no network call:
+
+```sh
+slack-mcp-check [--content-type text/plain] [--style paragraphs,plain-markup] [--json] [FILE]
+```
+
+It reads the text from `FILE` or standard input and exits 0 (passes), 1 (refused) or 2 (could not check). With `--json` it prints one object: `{"schema": 1, "ok": false, "content_type": "text/markdown", "style": [], "issues": [{"kind": "dialect", "message": "…"}], "retry": {"content_type": "text/markdown", "text": "…"}}`; `retry` is `null` when there is no corrected text. `--style` defaults to `SLACK_MCP_STYLE`.
+
 ## Setup
 
 1. Create a Slack app at <https://api.slack.com/apps> → **From a manifest**:
@@ -56,8 +77,10 @@ Wherever a tool takes a channel, it accepts an ID, `#channel-name`, or `@user` f
    # slack-mcp-start.sh
    SLACK_USER_TOKEN="$(op read 'op://Private/Slack MCP/token')" || exit 1   # or any secret manager
    export SLACK_USER_TOKEN
-   exec uvx --from git+https://github.com/asaphe/slack-mcp slack-mcp
+   exec uvx --from git+https://github.com/asaphe/slack-mcp@v0.2.0 slack-mcp
    ```
+
+   To install both commands (`slack-mcp` and `slack-mcp-check`) once instead of resolving them at each start, run `uv tool install git+https://github.com/asaphe/slack-mcp@v0.2.0` and end the launcher with `exec slack-mcp`.
 
    ```sh
    claude mcp add slack --scope user -- /path/to/slack-mcp-start.sh
