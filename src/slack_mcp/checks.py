@@ -23,7 +23,8 @@ CODE = re.compile(FENCE + r"|(`+)[^\n]+?\2")
 MRKDWN_LINK = re.compile(r"<((?:https?|mailto):[^\s<>|]+)\|([^<>\n]+)>")
 DOT_BULLET = re.compile(r"(?m)^([ \t]*)[•◦▪][ \t]*")
 SINGLE_STAR = re.compile(r"(?:^|(?<=[\s(\[\"']))\*(?=[^\s*])([^*\n]*?[^\s*\\])\*(?=$|[\s.,:;!?)\]\"'])", re.MULTILINE)
-BARE_MENTION = re.compile(r"(?<![\w<@/.`!^|])@([A-Za-z][\w.\-]*\w)(?![\w/@])")
+MENTION_END = r"(?![\w/@])(?![.\-]+\w)(?![.\-]*[/@])"  # never a shorter name inside one token: @scope-name/pkg is no mention
+BARE_MENTION = re.compile(r"(?<![\w<@/.`!^|=])@([A-Za-z][\w.\-]*\w)" + MENTION_END)
 DOUBLE_STAR = re.compile(r"\*\*[^*\n]+\*\*")
 MD_LINK = re.compile(r"\[[^\]\n]+\]\([^)\s]+\)")
 HEADER = re.compile(r"(?m)^ {0,3}#{1,6} \S")
@@ -57,12 +58,17 @@ def prose(text: str) -> str:
     return CODE.sub("\x00", text)
 
 
+def in_bold(m: re.Match[str]) -> bool:
+    """Whether a single-asterisk span sits inside a **bold** span on its line, where it is italic by intent."""
+    return m.string.count("**", m.string.rfind("\n", 0, m.start()) + 1, m.start()) % 2 == 1
+
+
 def to_markdown(text: str) -> str:
     """Fix the prose with code masked, so a *span* holding a `code span` is rewritten whole, then restore the code."""
     code = iter([m.group(0) for m in CODE.finditer(text)])
     s = MRKDWN_LINK.sub(lambda m: f"[{m.group(2)}]({m.group(1)})", prose(text))
     s = DOT_BULLET.sub(lambda m: f"{m.group(1)}- ", s)
-    s = SINGLE_STAR.sub(lambda m: f"**{m.group(1)}**", s)
+    s = SINGLE_STAR.sub(lambda m: m.group(0) if in_bold(m) else f"**{m.group(1)}**", s)
     s = BARE_MENTION.sub(lambda m: f"`{m.group(0)}`", s)
     return re.sub("\x00", lambda _: next(code), s)
 
@@ -74,12 +80,12 @@ def markdown_issues(body: str) -> list[Issue]:
         found.append(Issue("dialect", f"{len(links)} Slack-mrkdwn link(s) like <url|label>; markdown_text needs [label](url)"))
     if bullets := DOT_BULLET.findall(masked):
         found.append(Issue("dialect", f"{len(bullets)} line(s) start with '•'; use '- ' bullets"))
-    if stars := [m.group(0) for m in SINGLE_STAR.finditer(masked)]:
+    if stars := [m.group(0) for m in SINGLE_STAR.finditer(masked) if not in_bold(m)]:
         found.append(
             Issue(
                 "dialect",
                 f"{len(stars)} single-asterisk span(s) like {stars[0]!r}: italic in markdown, not bold; use **bold**, "
-                "or backticks for a glob",
+                "_italic_, or backticks for a glob",
             )
         )
     return found + mention_issues(masked)

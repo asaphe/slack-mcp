@@ -230,6 +230,11 @@ def conversations_add_message(
     preview_hash: from conversations_preview_message; the post is refused unless channel, thread_ts, content_type
     and text are exactly what was previewed, and each preview sends once. Link and media unfurling is off."""
     check_thread_ts(thread_ts)
+    if isinstance(blocks, str):
+        try:
+            blocks = json.loads(blocks)  # parsed first, so an empty array cannot switch the text check off
+        except ValueError as error:
+            raise SlackError("blocks must be a JSON array") from error
     if not text and not blocks:
         raise SlackError("either text or blocks must be provided")
     if text is not None and not blocks:
@@ -242,7 +247,7 @@ def conversations_add_message(
             raise SlackError("preview_hash applies to a text post, not blocks")
         claim_preview(preview_hash, payload_hash(channel, thread_ts, content_type, text))
     if blocks:
-        args["blocks"] = json.loads(blocks) if isinstance(blocks, str) else blocks
+        args["blocks"] = blocks
         args["text"] = text
     else:
         args |= text_args(text or "", content_type)

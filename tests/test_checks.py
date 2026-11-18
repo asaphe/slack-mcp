@@ -83,6 +83,30 @@ def test_code_with_markup_is_restored_verbatim():
     assert check(text).retry_text == "**T**\n```\n• <https://x.y|z> *b*\n```\nsee `*.md` and `@x`"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Bump @typescript-eslint/parser and @foo.bar/baz today.",
+        "See https://example.com/q?u=@someone for it.",
+        "**bold *nested* text**",
+    ],
+    ids=["scoped-package", "url-query", "italic-inside-bold"],
+)
+def test_text_that_only_looks_like_wrong_dialect_passes_unchanged(text):
+    assert check(text, style=ALL) == Result((), "text/markdown", None)
+
+
+def test_mention_at_the_end_of_a_sentence_is_still_refused():
+    for text in ("Ask @platform.", "Ask @jane.doe, then @platform-team: go.", "(@here)"):
+        assert [i.kind for i in check(text).issues] == ["mention"], text
+
+
+def test_italic_inside_bold_survives_a_rewrite_of_its_neighbours():
+    result = check("*Title* and **bold *nested* text**")
+    assert result.retry_text == "**Title** and **bold *nested* text**"
+    assert not check(result.retry_text).issues
+
+
 def test_nul_bytes_are_dropped_before_checking():
     result = check("*a\x00b*")
     assert result.retry_text == "**ab**"

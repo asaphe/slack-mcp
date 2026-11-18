@@ -703,6 +703,14 @@ def test_blocks_message_is_not_checked(fake):
     assert fake.last("chat.postMessage")["text"] == "*fallback* • x"
 
 
+def test_an_empty_blocks_string_does_not_switch_the_check_off(fake):
+    with pytest.raises(SlackError, match="slack-mcp message check"):
+        server.conversations_add_message("@bob", text="*Status* • x", blocks="[]")
+    with pytest.raises(SlackError, match="blocks must be a JSON array"):
+        server.conversations_add_message("@bob", text="fine", blocks="not json")
+    assert fake.calls == []
+
+
 def test_unknown_content_type_is_refused_before_any_slack_call(fake):
     with pytest.raises(SlackError, match="content_type must be"):
         server.conversations_add_message("@bob", text="x", content_type="text/html")
